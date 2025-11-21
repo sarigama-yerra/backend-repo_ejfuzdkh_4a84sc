@@ -1,55 +1,59 @@
-"""
-Database Helper Functions
-
-MongoDB helper functions ready to use in your backend code.
-Import and use these functions in your API endpoints for database operations.
-"""
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from pymongo import MongoClient
-from datetime import datetime, timezone
-import os
-from dotenv import load_dotenv
-from typing import Union
-from pydantic import BaseModel
+from pymongo.collection import Collection
 
-# Load environment variables from .env file
-load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "app_db")
 
-_client = None
-db = None
+client: Optional[MongoClient] = None
+_db = None
 
-database_url = os.getenv("DATABASE_URL")
-database_name = os.getenv("DATABASE_NAME")
+try:
+    client = MongoClient(DATABASE_URL)
+    _db = client[DATABASE_NAME]
+except Exception as e:
+    client = None
+    _db = None
 
-if database_url and database_name:
-    _client = MongoClient(database_url)
-    db = _client[database_name]
+db = _db
 
-# Helper functions for common database operations
-def create_document(collection_name: str, data: Union[BaseModel, dict]):
-    """Insert a single document with timestamp"""
+
+def _collection(name: str) -> Collection:
     if db is None:
-        raise Exception("Database not available. Check DATABASE_URL and DATABASE_NAME environment variables.")
+        raise RuntimeError("Database is not initialized")
+    return db[name]
 
-    # Convert Pydantic model to dict if needed
-    if isinstance(data, BaseModel):
-        data_dict = data.model_dump()
-    else:
-        data_dict = data.copy()
 
-    data_dict['created_at'] = datetime.now(timezone.utc)
-    data_dict['updated_at'] = datetime.now(timezone.utc)
-
-    result = db[collection_name].insert_one(data_dict)
+def create_document(collection_name: str, data: Dict[str, Any]) -> str:
+    col = _collection(collection_name)
+    now = datetime.utcnow()
+    data["created_at"] = now
+    data["updated_at"] = now
+    result = col.insert_one(data)
     return str(result.inserted_id)
 
-def get_documents(collection_name: str, filter_dict: dict = None, limit: int = None):
-    """Get documents from collection"""
-    if db is None:
-        raise Exception("Database not available. Check DATABASE_URL and DATABASE_NAME environment variables.")
-    
-    cursor = db[collection_name].find(filter_dict or {})
+
+def get_documents(collection_name: str, filter_dict: Dict[str, Any] | None = None, limit: int = 100, sort: Optional[list] = None) -> List[Dict[str, Any]]:
+    col = _collection(collection_name)
+    cursor = col.find(filter_dict or {})
+    if sort:
+        cursor = cursor.sort(sort)
     if limit:
         cursor = cursor.limit(limit)
-    
     return list(cursor)
+
+
+def update_document(collection_name: str, filter_dict: Dict[str, Any], update_dict: Dict[str, Any]) -> int:
+    col = _collection(collection_name)
+    update_dict["updated_at"] = datetime.utcnow()
+    result = col.update_one(filter_dict, {"$set": update_dict})
+    return result.modified_count
+
+
+def delete_document(collection_name: str, filter_dict: Dict[str, Any]) -> int:
+    col = _collection(collection_name)
+    result = col.delete_one(filter_dict)
+    return result.deleted_count
